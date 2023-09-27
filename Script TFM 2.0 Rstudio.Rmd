@@ -1,0 +1,207 @@
+---
+title: "TFM 2.0 Rstudio - Script"
+author: "Christopher Casco"
+date: "2023-09-25"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Directorio de Trabajo
+setwd("E:/MASTER/MODULOS/Módulo 10/TFM 2.0 Rstudio")
+```
+
+```{r}
+args = commandArgs(trailingOnly=TRUE)
+if (length(args) == 0) {
+  bc_data <- "gene_reads_2017-06-05_v8_brain_cortex.gct"
+  wb_data <- "gene_reads_2017-06-05_v8_whole_blood.gct"
+  vers <- "V8"
+} else {
+  bc_data <- args[1]
+  wb_data <- args[1]
+  vers <- args[2]
+}
+```
+
+```{r}
+#Cargamos las Librerias
+
+library(here)
+library(hipathia)
+library(feather)
+library(edgeR)
+library(data.table)
+library("R.utils")
+```
+
+```{r}
+#Creamos los directorios necesarios
+
+directories <- c(
+  "data/original",
+  "data/clean",
+  "data/final",
+  "code/initial",
+  "code/final", 
+  "graphics", 
+  "table"
+  )
+
+for (dir_path in directories) {
+  if (dir.create(here(dir_path), showWarnings = FALSE, recursive = TRUE)) {
+    cat("Directory created:", here(dir_path), "\n")
+  } else {
+    cat("Directory already exist:", here(dir_path), "\n")
+  }
+}
+
+cat("Ready directories\n")
+```
+
+```{r}
+### Carga de los datos de expresion de GTEx en archivos .gct ###
+#==============================================================#
+
+# Lectura del dataset brain_cortex de GTEx
+read_bc_data <- fread(
+  file = here("data", bc_data),
+  header = T, sep = "\t"
+) %>% as.data.frame(.)
+
+rownames(read_bc_data) <- read_bc_data$Name
+read_bc_data <- read_bc_data[, -(1:2)]
+print("read...done")
+
+# Lectura del dataset whole_blood de GTEx
+read_wb_data <- fread(
+  file = here("data", wb_data),
+  header = T, sep = "\t"
+) %>% as.data.frame(.)
+
+rownames(read_wb_data) <- read_wb_data$Name
+read_wb_data <- read_wb_data[, -(1:2)]
+print("read...done")
+```
+
+```{r}
+## Exportar los datos procesados en formato .gct##
+write.table(read_bc_data,
+            file = "E:/MASTER/MODULOS/Módulo 10/TFM 2.0 Rstudio/data/clean/read_bc_data.gct",
+            sep = "\t",
+            quote = FALSE,
+            col.names = TRUE,
+            row.names = TRUE
+            )
+
+write.table(read_wb_data,
+            file = "E:/MASTER/MODULOS/Módulo 10/TFM 2.0 Rstudio/data/clean/read_wb_data",
+            sep = "\t",
+            quote = FALSE,
+            col.names = TRUE,
+            row.names = TRUE
+            )
+```
+
+```{r}
+## Combinacion de columnas numéricas de read_bc_data y read_wb_data ##
+#====================================================================#
+
+# Columnas numéricas de read_bc_data
+read_bc_numeric <- read_bc_data[, sapply(read_bc_data, is.numeric)]
+
+# Columnas numéricas de read_wb_data
+read_wb_numeric <- read_wb_data[, sapply(read_wb_data, is.numeric)]
+
+# Combina los data frames numéricos
+bc_wb_read <- cbind(read_bc_numeric, read_wb_numeric)
+```
+
+```{r}
+## Exportar los datos combinados ##
+
+write.table(bc_wb_read,
+            file = "E:/MASTER/MODULOS/Módulo 10/TFM 2.0 Rstudio/data/clean/bc_wb_read.gct",
+            sep = "\t",
+            quote = FALSE,
+            col.names = TRUE,
+            row.names = TRUE
+            )
+```
+
+```{r}
+# Normalizacion por TMM with "edgeR" package
+
+dge <- DGEList(counts = bc_wb_read)
+print("dge...done")
+tmm <- calcNormFactors(dge, method = "TMM")
+print("tmm...done")
+logcpm <- cpm(tmm, prior.count = 3, log = TRUE)
+print("dge...done")
+```
+
+```{r}
+# eliminate from rownames the ".number", beacuse Hipathia does not process them well
+# Eliminamos de rowname los ".number", debido a que HiPahia no los procesa correctamente
+
+rownames(logcpm) <- gsub("\\..*", "", rownames(logcpm))
+print("normalization 1...done")
+```
+
+```{r}
+#### normalization datos - logarithmic scale ####
+              # HiPathia #
+#===============================================#
+
+trans_data <- translate_data(logcpm, "hsa")
+exp_data <- normalize_data(trans_data)
+```
+
+```{r}
+## Carga de rutas de senalizacion para humanos ##
+
+pathways <- load_pathways(species = "hsa")
+```
+
+```{r}
+ ## Análisis de señalización utilizando la función hipathia() ##
+#=============================================================#
+
+hidata <- hipathia(exp_data, pathways, uni.terms = TRUE, GO.terms = TRUE,
+                   decompose = FALSE, verbose = TRUE)
+path_vals <- get_paths_data(results, matrix = TRUE)
+```
+
+```{r}
+## Guardar el resultados del computo de senalizacion con HiPahia ##
+
+saveRDS(
+  exp_data, 
+  file = here("data", "final", paste0("expreset_Hinorm_gtex", vers, ".rds"))
+)
+
+saveRDS(
+  path_vals, 
+  file = here("data", "final", paste0("expreset_pathvals_gtex", vers, ".rds"))
+)
+
+save_feather <- function(x, path) {
+  df <- data.frame(index = row.names(x), x)
+
+  feather::write_feather(df, path)
+}
+
+save_feather(
+  t(exp_data),
+  here("data", "final", paste0("expreset_Hinorm_gtex", vers, ".rds.feather"))
+)
+
+save_feather(
+  t(path_vals),
+  here("data", "final", paste0("expreset_pathvals_gtex", vers, ".rds.feather"))
+)
+```
+
